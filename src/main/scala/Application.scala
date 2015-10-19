@@ -1,37 +1,36 @@
-import scala.concurrent.Await
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.io.StdIn
+import scala.util.{Failure, Success}
 
 /**
  * The main program entry-point.
  */
 object Application extends App with SignalRSupport {
-  println("Connecting...")
+  val signalRServiceUrl = "http://localhost:19123/signalr"
 
-  val handler = new MyHandler()
-
-  println("Creating hub proxy...")
-  val broadcastHub = connection.createHubProxy("broadcast");
-  broadcastHub.subscribe(handler)
+  println(s"Connecting to SignalR on '$signalRServiceUrl'...")
 
   println("Waiting for connection...")
-  Await.result(
-    connectSignalR(),
-    atMost = 30.seconds
-  )
-  println("Connected (press enter to terminate).")
+  connectSignalR { connection =>
+    println("Creating hub proxy...")
+    val broadcastHub = connection.createHubProxy("broadcast")
 
-  StdIn.readLine()
+    broadcastHub.subscribe(new Object {
+      def OnSay(what: String): Unit = {
+        println(s"Said: $what")
 
-  println("Disconnecting...")
-  connection.stop()
-  println("Disconnected.")
+        broadcastHub.invoke("Say", "Hello from Scala")
+      }
+    })
+  } andThen {
+    case Success(_) =>
+      println("Connected (press enter to terminate).")
 
-  class MyHandler {
-    def OnSay(what: String): Unit = {
-      println(s"Said: $what")
+      StdIn.readLine()
 
-      broadcastHub.invoke("Say", "Hello from Scala")
-    }
+      println("Disconnecting...")
+      disconnectSignalR()
+      println("Disconnected.")
+    case Failure(error) => println(s"Failed to connect to SignalR: $error")
   }
 }

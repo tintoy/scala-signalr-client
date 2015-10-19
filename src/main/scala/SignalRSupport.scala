@@ -6,51 +6,112 @@ import scala.util.Success
 
 /**
  * Basic support for SignalR.
+ * @note `connection` is pre-configured to call
  */
 trait SignalRSupport {
-  val connection = new HubConnection("http://localhost:19123/signalr")
-  connection.error(new ErrorCallback {
-    override def onError(error: Throwable): Unit = {
-      onSignalRError(error)
-    }
-  })
+  /**
+   * The URL of the SignalR service to connect to.
+   * @note AF: This is shitty design.
+   *       Find a better way (concurrent dictionary of connections keyed by URL perhaps).
+   */
+  val signalRServiceUrl: String
 
-  def connectSignalR(): Future[Void] = {
-    toNativeFuture(
-      connection.start()
-    )
-  }
+  /**
+   * The connection to SignalR.
+   * @note AF: This is shitty design.
+   *       Find a better way (concurrent dictionary of connections keyed by URL perhaps).
+   */
+  private lazy val connection = new HubConnection(signalRServiceUrl)
 
-  // Handlers
+  /**
+   * Asynchronously connect to the SignalR service specified by `signalRServiceUrl`.
+   * @param configurator An optional function used to perform additional configuration of the connection.
+   * @return A `Future[Void]` representing the asynchronous connection process.
+   */
+  protected def connectSignalR(configurator: (HubConnection) => Unit = null): Future[Unit] = {
+    connection.error(new ErrorCallback {
+      override def onError(error: Throwable): Unit = {
+        onSignalRError(error)
+      }
+    })
 
-  def onSignalRError(error: Throwable): Unit = {
-    println(s"connection.onError: $error")
+    if (configurator != null)
+      configurator(connection)
+
+    connection.start().toNativeFuture
   }
 
   /**
-   * Convert a SignalR future to a native (Scala) future.
-   * @param signalRFuture The SignalR future to convert.
-   * @tparam TResult The future result type.
-   * @return The native (Scala) future.
+   * Disconnect from the SignalR service.
    */
-  private def toNativeFuture[TResult](signalRFuture: SignalRFuture[TResult]): Future[TResult] = {
-    if (signalRFuture == null)
-      throw new IllegalArgumentException("SignalR future cannot be null.")
+  protected def disconnectSignalR(): Unit = {
+    connection.stop()
+  }
 
-    val nativePromise = Promise[TResult]()
+  /**
+   * Called when the SignalR connection encounters an error.
+   * @param error The error.
+   */
+  protected def onSignalRError(error: Throwable): Unit = {
+    if (error != null) println(s"connection.onError: $error")
+    else println("SignalR error handler: error was null!")
+  }
 
-    signalRFuture
-      .done(new Action[TResult] {
-        override def run(result: TResult): Unit = {
-          nativePromise.complete(Success(result))
-        }
-      })
-      .onError(new ErrorCallback {
-        override def onError(error: Throwable): Unit = {
-          nativePromise.failure(error)
-        }
-      })
+  /**
+   * Extension-method-style converter from SignalR futures to native (Scala) futures.
+   * @param signalRFuture The SignalR future converter.
+   * @tparam TResult The future result type.
+   */
+  implicit protected class SignalRFutureConverter[TResult](private val signalRFuture: SignalRFuture[TResult]) {
+    def toNativeFuture: Future[TResult] = {
+      if (signalRFuture == null)
+        throw new IllegalArgumentException("SignalR future cannot be null.")
 
-    nativePromise.future
+      val nativePromise = Promise[TResult]()
+
+      // AF: Doesn't handle "cancellation" feature of SignalR futures.
+      signalRFuture
+          .done(new Action[TResult] {
+            override def run(result: TResult): Unit = {
+              nativePromise.complete(Success(result))
+            }
+          })
+          .onError(new ErrorCallback {
+            override def onError(error: Throwable): Unit = {
+              nativePromise.failure(error)
+            }
+          })
+
+      nativePromise.future
+    }
+  }
+
+  /**
+   * Extension-method-style converter from SignalR futures to native (Scala) futures.
+   * @param signalRFuture The SignalR future converter.
+   */
+  implicit protected class SignalRVoidFutureConverter(private val signalRFuture: SignalRFuture[Void]) {
+    def toNativeFuture: Future[Unit] = {
+      if (signalRFuture == null)
+        throw new IllegalArgumentException("SignalR future cannot be null.")
+
+      val nativePromise = Promise[Unit]()
+
+      // AF: Doesn't handle "cancellation" feature of SignalR futures.
+      signalRFuture
+          .done(new Action[Void] {
+            override def run(result: Void): Unit = {
+              nativePromise.trySuccess(result)
+            }
+          })
+          .onError(new ErrorCallback {
+            override def onError(error: Throwable): Unit = {
+              nativePromise.tryFailure(error)
+            }
+          })
+
+      nativePromise.future
+    }
   }
 }
+
