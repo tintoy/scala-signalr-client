@@ -18,10 +18,10 @@ object Application extends App with SignalRSupport {
     broadcastHub.subscribe(new Object {
       def OnSay(what: String): Unit = {
         println(s"Said: $what")
-
-        broadcastHub.invoke("Say", "Hello from Scala")
       }
     })
+    
+    broadcastHub.invoke("Say", "Hello from Scala")
   } andThen {
     case Success(_) =>
       println("Connected (press enter to terminate).")
